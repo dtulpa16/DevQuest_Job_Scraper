@@ -30,24 +30,52 @@ def scrape_url(session, url, proxy):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error accessing {url} with proxy {proxy}: {e}")
         return None
-    
-def fetch_job_details(session, article_data, proxy):
-    article_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + article_data['href']
-    article_soup = scrape_url(session, article_url, proxy)
-    #! main container - <div class="jobsearch-JobComponent">
-    # Job title - <h1 class="jobsearch-JobInfoHeader-title"> <span> Title </span> </h1>
-    # Company name - <div data-testid="jobsearch-CompanyInfoContainer"> <a> Company name </a> </div>
-    # Job Location - <div id="jobLocationText"> <span> Job Location </span> </div>
-    # Benefits - <div id="benefits"> <li> benefit </li> <li> benefit </li> <li> benefit </li> <li> benefit </li> </div>
-    # Job Description - <div id="jobDescriptionText"> *a lot of HTML. If possible, I want to grab all the raw HTML* </div>
-    # Apply link - 
-    
-    if not article_soup:
+
+
+def fetch_job_details(session, job_data, proxy):
+    job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_data['href']  # job details url to scrape
+    job_soup = scrape_url(session, job_url, proxy)  # returns the HTML parsed with BeautifulSoup
+
+    if not job_soup:
         return None
+
     try:
-       pass
+        job_details = {}
+
+        # job title
+        title_container = job_soup.find('h1', class_='jobsearch-JobInfoHeader-title')
+        job_details['title'] = title_container.get_text(strip=True) if title_container else 'No title found'
+
+        # ompany name
+        company_container = job_soup.find('div', attrs={"data-testid": "jobsearch-CompanyInfoContainer"})
+        job_details['company'] = company_container.find('a').get_text(strip=True) if company_container else 'No company found'
+
+        # job location
+        location_container = job_soup.find('div', id='jobLocationText')
+        job_details['location'] = location_container.get_text(strip=True) if location_container else 'No location found'
+
+        # benefits
+        benefits_container = job_soup.find('div', id='benefits')
+        if benefits_container:
+            benefits = benefits_container.find_all('li')
+            job_details['benefits'] = [benefit.get_text(strip=True) for benefit in benefits]
+        else:
+            job_details['benefits'] = 'No benefits found'
+
+        # job description as raw HTML
+        description_container = job_soup.find('div', id='jobDescriptionText')
+        job_details['description_html'] = str(description_container) if description_container else 'No description found'
+
+        # apply link
+        apply_container = job_soup.find('div', id='applyButtonLinkContainer')
+        if apply_container and apply_container.button and apply_container.button.has_attr('href'):
+            job_details['apply_link'] = apply_container.button['href']
+        else:
+            job_details['apply_link'] = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_data['href']
+
+        return job_details
     except Exception as e:
-        logging.error(f"Failed to process article {article_url}: {e}")
+        logging.error(f"Failed to process job {job_url}: {e}")
         return None
 
 
