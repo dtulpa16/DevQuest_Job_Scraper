@@ -1,5 +1,5 @@
 import os
-from flask import Flask
+from flask import Flask, jsonify, request
 import logging
 import requests
 from bs4 import BeautifulSoup
@@ -34,26 +34,24 @@ def scrape_url(session, url, proxy):
         return None
 
 def extract_json_data(soup):
-    # Find the script tag that contains the `window._initialData`
+    # script tag that contains the `window._initialData` - holds json of job data
     for script in soup.find_all('script'):
         if 'window._initialData' in script.text:
-            # Improved Regex pattern to robustly find JSON object
+            # find JSON object in intial data
             pattern = re.compile(r'window\._initialData\s*=\s*(\{.*?\});', re.DOTALL)
             match = pattern.search(script.text)
             if match:
-                # Using json.loads to parse the JSON string
+                # parse the JSON string
                 try:
                     json_data = json.loads(match.group(1))
                     return json_data
                 except json.JSONDecodeError as e:
                     print("Error decoding JSON:", e)
-    
     return None
 
 #Scrapes a single job
-def fetch_job_details(session, job_data, proxy):
-    # job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_data['href']  # job details url to scrape
-    job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + '30eb562caef8a2a6' # job details url to scrape
+def fetch_job_details(session, job_id, proxy):
+    job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_id # job details url to scrape
     job_soup = scrape_url(session, job_url, proxy)  # returns the HTML parsed with BeautifulSoup
 
     if not job_soup:
@@ -72,8 +70,8 @@ def fetch_job_details(session, job_data, proxy):
         
         # location
         job_details["job_city"] = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['formatted']['short']
-        if job_details["job_city"].lower() == "remote":
-                job_details['job_is_remote'] = True
+       
+        job_details['job_is_remote'] = True  if job_details["job_city"].lower() == "remote" else False
         
         #salary
         job_details["salary_text"] = json_data['salaryInfoModel']['salaryText'] if json_data['salaryInfoModel']['salaryText'] else 'None Provided'
@@ -85,30 +83,20 @@ def fetch_job_details(session, job_data, proxy):
         job_details["job_description"] = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['text'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['text'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html']
         job_details["job_description_html"] = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'] else json_data['jobInfoWrapperModel']['jobInfoModel']['sanitizedJobDescription']
 
-        benefits = json_data['benefitsModel']['benefits'] if json_data['benefitsModel']['benefits'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits']
-        job_details['job_benefits'] = benefits
-        # if benefits:
-        #     job_details['job_benefits'] = [benefit.label for benefit in benefits]
-        # else:
-        #     benefits = []
+        try:
+            benefits = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits'] else json_data['benefitsModel']['benefits']
+            job_details['job_benefits'] = benefits
+        except:
+            job_details['job_benefits'] = []
+        
 
         job_details['job_age'] = json_data['hiringInsightsModel']['age'] or None
 
-        # required_skills = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes']
-        # if required_skills:
-        #     job_details['job_required_skills'] = [skill.label for skill in required_skills]
-        # else:
-        #     benefits = []
-
-        #TODO - Get Required Skills
-        # skills_container = job_soup.find('div', class_="js-match-insights-provider-kyg8or")
-        # # skills_list = skills_container.find('ul',class_="js-match-insights-provider-18foz0k")
-        # skills_list = job_soup.find_all('li', class_="js-match-insights-provider-o8j44y")
-        # required_skills_list = []
-        # for item in skills_list:
-        #     full_text = item.get_text(strip=True)
-        #     required_skills_list.append(full_text) 
-        # job_details['job_required_skills'] = required_skills_list
+        required_skills = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes']
+        if required_skills:
+            job_details['attributes'] = required_skills
+        else:
+            job_details['attributes'] = []
 
         return job_details
     
@@ -122,42 +110,55 @@ def fetch_job_details(session, job_data, proxy):
 def fetch_jobs(proxies, target_url):
     jobs_data = []
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
+            successful_fetch = False
             for proxy in proxies:
                 if not proxy['valid']:
                     logging.info("Invalid Proxy")
                     continue
                 # create one session per proxy
                 session = requests.Session()  
-                test_data = fetch_job_details(session,"",proxy)
-
+                # test_data = fetch_job_details(session,"",proxy)
                 data = scrape_url(session, target_url, proxy)
                 if data:
                     jobs_data = []
                     job_list = data.find('div', id='mosaic-jobResults')
-                    job_list = job_list.find('ul')
                     if job_list:
-                        jobs = job_list.find_all('li')
-                        futures = []
+                        jobs = job_list.find('ul').find_all('li') if job_list.find('ul') else []
                         for job in jobs:
                             job_data = {}
-                            # job id
-                            link = job.find('h2', class_="jobTitle").find("a")
-                            job_data['job_id'] = link['data-jk'] if link['data-jk'] else "no id"
 
+                            # Job Title
+                            title_element = job.find('h2', class_="jobTitle")
+                            job_data["job_title"] = title_element.get_text(strip=True) if title_element else None
+                            if not job_data["job_title"]:
+                                continue
 
-                            if link and link.has_attr('href'):
-                                pass
-                                # link['data-jk'] - job ID
-                                # fetch_job_details(session, {'href': link['data-jk']}, proxy)
-                                # future = executor.submit(fetch_job_details, session, {'href': link['href']}, proxy)
-                                # futures.append(future)
+                            # Job ID
+                            job_data['job_id'] = title_element.find("a")['data-jk'] if title_element and title_element.find("a") and 'data-jk' in title_element.find("a").attrs else "No ID"
 
-                        # collect results from futures
-                        # for future in futures:
-                        #     job_data = future.result()
-                        #     if job_data:
-                        #         jobs_data.append(job_data)
+                            # Employer Name
+                            employer_name_element = job.find("span", attrs={"data-testid":"company-name"})
+                            job_data["employer_name"] = employer_name_element.get_text(strip=True) if employer_name_element else "No Employer"
+
+                            # Job City
+                            job_city_element = job.find("div", attrs={"data-testid":"text-location"})
+                            job_data["job_city"] = job_city_element.get_text(strip=True) if job_city_element else "No Location"
+
+                            job_data["is_remote"] = True if "remote" in job_data["job_city"] else False
+
+                            # Job Attributes
+                            attribute_elements = job.find("div", class_="jobMetaDataGroup")
+                            if attribute_elements:
+                                job_data["job_attributes"] = [attr.get_text(strip=True) for attr in attribute_elements.find_all("div", attrs={"data-testid":"attribute_snippet_testid"})]
+
+                            # Job Description
+                            description_preview_element = job.find("div", class_="underShelfFooter")
+                            # description_text = description_preview_element.find("ul").get_text()
+                            if description_preview_element and description_preview_element.find("ul"):
+                                job_data["job_description"] = [li.get_text(strip=True) for li in description_preview_element.find("ul").find_all("li")]
+
+                            jobs_data.append(job_data)
 
                         successful_fetch = True
                         break  # bvreak if successful with proxy
@@ -168,24 +169,65 @@ def fetch_jobs(proxies, target_url):
 
 
 
-
-
-
 @app.route('/')
 def home():
+    return "OK"
+
+@app.route('/get-jobs', methods=['GET'])
+def get_jobs():
+    # parameters from URL with defaults
+    role = request.args.get('role', 'software engineer')
+    location = request.args.get('location', 'remote')
+    # role = "software engineer"
+    # location = "remote"
+    # proxy API setup
     api_key = os.getenv('PROXY_API_SECRET')
-    # fetch proxy list
-    proxies = requests.get(
+    proxies_response = requests.get(
         "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=50&country_code__in=US,CA",
         headers={"Authorization": f"Token {api_key}"}
     )
-    proxies = proxies.json()['results']
-    role = "javascript"
-    location = "Colorado"
+    proxies = proxies_response.json()['results']
     scrape_url = os.getenv('SCRAPE_URL')
     url = f"{scrape_url}/jobs?q={role}&l={location}&from=searchOnDesktopSerp"
     jobs = fetch_jobs(proxies, url)
-    return "OK"
 
-x = home()
-print(x)
+    return jsonify({
+        'role': role,
+        'location': location,
+        'jobs': jobs
+    })
+
+
+@app.route('/get-job/<jobId>', methods=['GET'])
+def get_job(jobId):
+    api_key = os.getenv('PROXY_API_SECRET')
+    proxies_response = requests.get(
+        "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=50&country_code__in=US,CA",
+        headers={"Authorization": f"Token {api_key}"}
+    )
+    proxies = proxies_response.json()['results']
+    successful_fetch = False
+    data = None
+
+    for proxy in proxies:
+        if not proxy.get('valid', False):
+            logging.info("Invalid Proxy")
+            continue
+
+        session = requests.Session()
+        data = fetch_job_details(session, jobId, proxy)
+        if data:
+            successful_fetch = True
+            break
+
+    if not successful_fetch:
+        logging.error(f"Failed to fetch job details for jobId {jobId} from all proxies.")
+        return jsonify({"error": "Failed to retrieve data"}), 500
+
+    return jsonify({
+        'jobId': jobId,
+        'job': data 
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True)
