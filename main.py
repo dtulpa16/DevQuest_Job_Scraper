@@ -106,12 +106,29 @@ def fetch_job_details(session, job_id, proxy):
         return None
     
 
+# Grabs JSON Metadata from initialData - Used for Job List
+def extract_metadata(html_content):
+    script_tag = html_content.find('script', {'id': 'mosaic-data'})  
+
+    if script_tag:
+        script_content = script_tag.string
+        # Adjust regex to directly capture the content after "mosaic-provider-jobcards"
+        pattern = re.compile(r'window\.mosaic\.providerData\["mosaic-provider-jobcards"\]\s*=\s*(\{.*?\});', re.DOTALL)
+        match = pattern.search(script_content)
+        if match:
+            # Directly parse the JSON object for "mosaic-provider-jobcards"
+            jobcards_data = json.loads(match.group(1))
+            # Access 'metaData' directly from this object
+            metadata = jobcards_data.get("metaData", {})
+            return jobcards_data['metaData']['mosaicProviderJobCardsModel']['results'] if jobcards_data['metaData']['mosaicProviderJobCardsModel']['results'] else None
+    return None
+
 
 # Scrapes list of jobs
 def fetch_jobs(proxies, target_url):
     jobs_data = []
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
             successful_fetch = False
             for proxy in proxies:
                 if not proxy['valid']:
@@ -119,49 +136,67 @@ def fetch_jobs(proxies, target_url):
                     continue
                 session = requests.Session()  
                 data = scrape_url(session, target_url, proxy)
-                json_data = extract_json_data(data)
-                if data:
+
+                snippet_src = data.find_all('div', {'class', 'summary'})
+                snippet_list = []
+                for val in snippet_src:
+                    snippet_list.append(val.get_text())
+
+                json_data = extract_metadata(data)
+                if json_data:
                     jobs_data = []
-                    job_list = data.find('div', id='mosaic-jobResults')
-                    if job_list:
-                        jobs = job_list.find('ul').find_all('li') if job_list.find('ul') else []
-                        for job in jobs:
-                            job_data = {}
+                    for job in json_data:
+                        job_data = {}
+                        job_data['job_id'] = job.get('jobkey', 'No Job ID')
+                        job_data['job_title'] = job.get('displayTitle') or job.get('title', 'Unknown Title')
+                        job_data['employer_name'] = job.get('company', 'Unknown Company')
+                        job_data['job_city'] = job.get('formattedLocation') or job.get('jobLocationCity', 'Unknown Location')
 
-                            # Job Title
-                            title_element = job.find('h2', class_="jobTitle")
-                            job_data["job_title"] = title_element.get_text(strip=True) if title_element else None
-                            if not job_data["job_title"]:
-                                continue
+                        
+                        remote_work_model = job.get('remoteWorkModel', {})
+                        job_data['job_is_remote'] = "remote" in remote_work_model.get('text', '').lower()
 
-                            # Job ID
-                            job_data['job_id'] = title_element.find("a")['data-jk'] if title_element and title_element.find("a") and 'data-jk' in title_element.find("a").attrs else "No ID"
+                        # salary 
+                        extracted_salary = job.get('extractedSalary', {})
+                        estimated_salary = job.get('estimatedSalary', {})
+                        job_data['job_min_salary'] = extracted_salary.get('min') or estimated_salary.get('min')
+                        job_data['job_max_salary'] = extracted_salary.get('max') or estimated_salary.get('max')
 
-                            # Employer Name
-                            employer_name_element = job.find("span", attrs={"data-testid":"company-name"})
-                            job_data["employer_name"] = employer_name_element.get_text(strip=True) if employer_name_element else "No Employer"
+                        # requirements 
+                        requirements_model = job.get('jobCardRequirementsModel', {})
+                        requirements = requirements_model.get('jobTagRequirements') or requirements_model.get('jobOnlyRequirements', [])
+                        job_data['job_required_skills'] = [req.get('label') for req in requirements if 'label' in req]
 
-                            # Job City
-                            job_city_element = job.find("div", attrs={"data-testid":"text-location"})
-                            job_data["job_city"] = job_city_element.get_text(strip=True) if job_city_element else "No Location"
+                     
+                        salary_snippet = job.get('salarySnippet', {})
+                        job_data['salary_text'] = salary_snippet.get('text') or estimated_salary.get('formattedRange')
 
-                            job_data["is_remote"] = True if "remote" in job_data["job_city"].lower() else False
+                        # Benefits
+                        benefits_attributes = next((item for item in job.get('taxonomyAttributes', []) if item.get('label') == 'benefits'), None)
+                        if benefits_attributes:
+                            labels = [attr.get('label') for attr in benefits_attributes.get('attributes', [])]
+                            job_data['job_highlights'] = {'Benefits': labels}
+                            job_data['job_benefits'] = labels
 
-                            # Job Attributes
-                            attribute_elements = job.find("div", class_="jobMetaDataGroup")
-                            if attribute_elements:
-                                job_data["job_attributes"] = [attr.get_text(strip=True) for attr in attribute_elements.find_all("div", attrs={"data-testid":"attribute_snippet_testid"})]
+                        job_data['employer_logo'] = job.get('companyBrandingAttributes', {}).get('logoUrl')
+                        job_data['html_snippet'] = job.get('snippet', '<></>')
 
-                            # Job Description
-                            description_preview_element = job.find("div", class_="underShelfFooter")
-                            # description_text = description_preview_element.find("ul").get_text()
-                            if description_preview_element and description_preview_element.find("ul"):
-                                job_data["job_description"] = [li.get_text(strip=True) for li in description_preview_element.find("ul").find_all("li")]
+                        job_data['job_apply_link'] = job.get('thirdPartyApplyUrl')
 
-                            jobs_data.append(job_data)
+                        # job description safely
+                        description_content = job.get('snippet', '')
+                        try:
+                            description_soup = BeautifulSoup(description_content, 'html.parser')
+                            description_items = description_soup.find_all('li')
+                            job_data["job_description"] = [li.get_text(strip=True) for li in description_items if li.text.strip()]
+                        except Exception as e:
+                            logging.error(f"Error parsing job description for job ID {job_data['job_id']}: {e}")
+                            job_data["job_description"] = description_content  # Fallback to raw content
 
-                        successful_fetch = True
-                        break  # bvreak if successful with proxy
+                        jobs_data.append(job_data)
+
+                    successful_fetch = True
+                    break  # bvreak if successful with proxy
 
             if not successful_fetch:
                 logging.error(f"Failed to fetch jobs from all proxies.")
@@ -176,8 +211,10 @@ def home():
 @app.route('/get-jobs', methods=['GET'])
 def get_jobs():
     # parameters from URL with defaults
-    role = request.args.get('role', 'software engineer')
-    location = request.args.get('location', 'remote')
+    # role = request.args.get('role', 'software engineer')
+    # location = request.args.get('location', 'remote')
+    role = "software engineer"
+    location = "remote"
     # proxy API setup
     api_key = os.getenv('PROXY_API_SECRET')
     proxies_response = requests.get(
@@ -227,5 +264,6 @@ def get_job(jobId):
         'job': data 
     })
 
-if __name__ == '__main__':
-    app.run(debug=True)
+# if __name__ == '__main__':
+#     app.run(debug=True)
+get_jobs()
