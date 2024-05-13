@@ -33,6 +33,7 @@ def scrape_url(session, url, proxy):
         logging.error(f"Error accessing {url} with proxy {proxy}: {e}")
         return None
 
+#! Helper to extract and parse intiialData for getting a single job's details
 def extract_json_data(soup):
     # script tag that contains the `window._initialData` - holds json of job data
     for script in soup.find_all('script'):
@@ -116,10 +117,9 @@ def fetch_jobs(proxies, target_url):
                 if not proxy['valid']:
                     logging.info("Invalid Proxy")
                     continue
-                # create one session per proxy
                 session = requests.Session()  
-                # test_data = fetch_job_details(session,"",proxy)
                 data = scrape_url(session, target_url, proxy)
+                json_data = extract_json_data(data)
                 if data:
                     jobs_data = []
                     job_list = data.find('div', id='mosaic-jobResults')
@@ -145,7 +145,7 @@ def fetch_jobs(proxies, target_url):
                             job_city_element = job.find("div", attrs={"data-testid":"text-location"})
                             job_data["job_city"] = job_city_element.get_text(strip=True) if job_city_element else "No Location"
 
-                            job_data["is_remote"] = True if "remote" in job_data["job_city"] else False
+                            job_data["is_remote"] = True if "remote" in job_data["job_city"].lower() else False
 
                             # Job Attributes
                             attribute_elements = job.find("div", class_="jobMetaDataGroup")
@@ -178,8 +178,6 @@ def get_jobs():
     # parameters from URL with defaults
     role = request.args.get('role', 'software engineer')
     location = request.args.get('location', 'remote')
-    # role = "software engineer"
-    # location = "remote"
     # proxy API setup
     api_key = os.getenv('PROXY_API_SECRET')
     proxies_response = requests.get(
