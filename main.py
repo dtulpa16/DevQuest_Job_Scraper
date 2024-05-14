@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import json
 import re
+import lxml
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 
@@ -28,7 +29,7 @@ def scrape_url(session, url, proxy):
         }
         response = session.get(url)
         response.raise_for_status()
-        return BeautifulSoup(response.text, 'html.parser')
+        return BeautifulSoup(response.text, 'lxml')
     except requests.exceptions.RequestException as e:
         logging.error(f"Error accessing {url} with proxy {proxy}: {e}")
         return None
@@ -137,10 +138,10 @@ def fetch_jobs(proxies, target_url):
                 session = requests.Session()  
                 data = scrape_url(session, target_url, proxy)
 
-                snippet_src = data.find_all('div', {'class', 'summary'})
-                snippet_list = []
-                for val in snippet_src:
-                    snippet_list.append(val.get_text())
+                # snippet_src = data.find_all('div', {'class', 'summary'})
+                # snippet_list = []
+                # for val in snippet_src:
+                #     snippet_list.append(val.get_text())
 
                 json_data = extract_metadata(data)
                 if json_data:
@@ -223,7 +224,8 @@ def get_jobs():
     )
     proxies = proxies_response.json()['results']
     scrape_url = os.getenv('SCRAPE_URL')
-    url = f"{scrape_url}/jobs?q={role}&l={location}&from=searchOnDesktopSerp"
+    # url = f"{scrape_url}/jobs?q={role}&l={location}&from=searchOnDesktopSerp"
+    url = f"{scrape_url}/jobs?q={role}&l={location}"
     jobs = fetch_jobs(proxies, url)
 
     return jsonify({
@@ -264,6 +266,6 @@ def get_job(jobId):
         'job': data 
     })
 
-# if __name__ == '__main__':
-#     app.run(debug=True)
-get_jobs()
+if __name__ == '__main__':
+    app.run(debug=True)
+# get_jobs()
