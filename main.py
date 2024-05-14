@@ -87,7 +87,8 @@ def fetch_job_details(session, job_id, proxy):
 
         try:
             benefits = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits'] else json_data['benefitsModel']['benefits']
-            job_details['job_benefits'] = benefits
+            labels = [attr.get('label') for attr in benefits]
+            job_details['job_benefits'] = labels
         except:
             job_details['job_benefits'] = []
         
@@ -96,7 +97,8 @@ def fetch_job_details(session, job_id, proxy):
 
         required_skills = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes']
         if required_skills:
-            job_details['attributes'] = required_skills
+            skills_labels = [attr.get('label') for attr in required_skills]
+            job_details['attributes'] = skills_labels
         else:
             job_details['attributes'] = []
 
@@ -113,7 +115,6 @@ def extract_metadata(html_content):
 
     if script_tag:
         script_content = script_tag.string
-        # Adjust regex to directly capture the content after "mosaic-provider-jobcards"
         pattern = re.compile(r'window\.mosaic\.providerData\["mosaic-provider-jobcards"\]\s*=\s*(\{.*?\});', re.DOTALL)
         match = pattern.search(script_content)
         if match:
@@ -137,11 +138,6 @@ def fetch_jobs(proxies, target_url):
                     continue
                 session = requests.Session()  
                 data = scrape_url(session, target_url, proxy)
-
-                # snippet_src = data.find_all('div', {'class', 'summary'})
-                # snippet_list = []
-                # for val in snippet_src:
-                #     snippet_list.append(val.get_text())
 
                 json_data = extract_metadata(data)
                 if json_data:
@@ -212,10 +208,11 @@ def home():
 @app.route('/get-jobs', methods=['GET'])
 def get_jobs():
     # parameters from URL with defaults
-    # role = request.args.get('role', 'software engineer')
-    # location = request.args.get('location', 'remote')
-    role = "software engineer"
-    location = "remote"
+    role = request.args.get('role', 'software engineer')
+    location = request.args.get('location', 'remote')
+    print(f"role: {role}\nlocation: {location}")
+    # role = "software engineer"
+    # location = "remote"
     # proxy API setup
     api_key = os.getenv('PROXY_API_SECRET')
     proxies_response = requests.get(
@@ -224,7 +221,7 @@ def get_jobs():
     )
     proxies = proxies_response.json()['results']
     scrape_url = os.getenv('SCRAPE_URL')
-    # url = f"{scrape_url}/jobs?q={role}&l={location}&from=searchOnDesktopSerp"
+
     url = f"{scrape_url}/jobs?q={role}&l={location}"
     jobs = fetch_jobs(proxies, url)
 
