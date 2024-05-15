@@ -1,7 +1,7 @@
 service: devquest-job-scraper
 provider:
   name: aws
-  runtime: python3.8
+  runtime: python3.11
   region: us-east-1
 
 plugins:
@@ -10,15 +10,26 @@ plugins:
 
 custom:
   wsgi:
-    app: main.app 
+    app: main.app
     packRequirements: false
+
+  pythonRequirements:
+    dockerizePip: true
+    useStaticCache: true
+    useDownloadCache: true
 
 functions:
   app:
     handler: wsgi.handler
     events:
-      - http: ANY /
-      - http: 'ANY {proxy+}'
+      - http:
+          path: /
+          method: ANY
+          cors: true
+      - http:
+          path: '{proxy+}'
+          method: ANY
+          cors: true
 
 package:
   exclude:
@@ -26,9 +37,6 @@ package:
     - venv/**
     - .gitignore
     - .git/**
-
-custom:
-  pythonRequirements:
-    dockerizePip: true
-    useStaticCache: true
-    useDownloadCache: true
+    - Pipfile
+    - Pipfile.lock
+    - handler.py
