@@ -1,46 +1,55 @@
 import os
-import random
-import string
 from flask import Flask, jsonify, request
 import logging
 import requests
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import json
 import re
 import lxml
+import aiohttp
+import asyncio
+
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 
 app = Flask(__name__)
 
 
-def scrape_url(session, url, proxy):
+async def fetch(session, url, proxy):
+    formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.5",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Referer": "https://www.google.com/",
+    }
     try:
-        formatted_proxy_url = f'http://{proxy["username"]}:{proxy["password"]}@{proxy["proxy_address"]}:{proxy["port"]}'
-        session.proxies = {"http": formatted_proxy_url, "https": formatted_proxy_url}
-        HEADERS = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "en-US,en;q=0.5",
-            "DNT": "1",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Referer": "https://www.google.com/",
-        }
-        session.headers = HEADERS
-        response = session.get(url, headers=HEADERS, proxies={"http": formatted_proxy_url, "https": formatted_proxy_url})
-        response.raise_for_status()
-        return BeautifulSoup(response.text, 'lxml')
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error accessing {url} with proxy {proxy}: {e}")
+        async with session.get(url, headers=headers, proxy=formatted_proxy_url, timeout=10) as response:
+            response.raise_for_status()
+            html = await response.text()
+            return BeautifulSoup(html, 'lxml')
+    except Exception as e:
+        logging.error(f"Error fetching URL {url} with proxy {proxy}: {e}")
         return None
+
+async def scrape_url(url, proxies):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch(session, url, proxy) for proxy in proxies]
+        for future in asyncio.as_completed(tasks):
+            result = await future
+            if result:
+                return result
+    return None
 
 def extract_json_data(soup):
     for script in soup.find_all('script'):
         if 'window._initialData' in script.text:
-            pattern = re.compile(r'window\._initialData\s*=\s*(\{.*?\});', re.DOTALL)
+            pattern = re.compile(r'window._initialData\s*=\s*(\{.*?\});', re.DOTALL)
             match = pattern.search(script.text)
             if match:
                 try:
@@ -50,9 +59,24 @@ def extract_json_data(soup):
                     logging.error(f"Error decoding JSON: {e}")
     return None
 
-def fetch_job_details(session, job_id, proxy):
+def extract_metadata(html_content):
+    try:
+        script_tag = html_content.find('script', {'id': 'mosaic-data'})
+        if script_tag:
+            script_content = script_tag.string
+            pattern = re.compile(r'window.mosaic.providerData\["mosaic-provider-jobcards"\]\s*=\s*(\{.*?\});', re.DOTALL)
+            match = pattern.search(script_content)
+            if match:
+                jobcards_data = json.loads(match.group(1))
+                metadata = jobcards_data.get("metaData", {})
+                return jobcards_data['metaData']['mosaicProviderJobCardsModel']['results'] if jobcards_data['metaData']['mosaicProviderJobCardsModel']['results'] else None
+    except Exception as e:
+        logging.error(f"Error extracting metadata: {e}")
+    return None
+
+async def fetch_job_details(session, job_id, proxy):
     job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_id
-    job_soup = scrape_url(session, job_url, proxy)
+    job_soup = await fetch(session, job_url, proxy)
     if not job_soup:
         return None
     json_data = extract_json_data(job_soup)
@@ -91,37 +115,17 @@ def fetch_job_details(session, job_id, proxy):
         logging.error(f"Failed to process job {job_url}: {e}")
         return None
 
-def extract_metadata(html_content):
-    try:
-        script_tag = html_content.find('script', {'id': 'mosaic-data'})
-        if script_tag:
-            script_content = script_tag.string
-            pattern = re.compile(r'window\.mosaic\.providerData\["mosaic-provider-jobcards"\]\s*=\s*(\{.*?\});', re.DOTALL)
-            match = pattern.search(script_content)
-            if match:
-                jobcards_data = json.loads(match.group(1))
-                metadata = jobcards_data.get("metaData", {})
-                return jobcards_data['metaData']['mosaicProviderJobCardsModel']['results'] if jobcards_data['metaData']['mosaicProviderJobCardsModel']['results'] else None
-    except Exception as e:
-        logging.error(f"Error extracting metadata: {e}")
-    return None
-
-def fetch_jobs(proxies, target_url):
+async def fetch_jobs(proxies, target_url):
     jobs_data = []
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        successful_fetch = False
-        for proxy in proxies:
-            if not proxy['valid']:
-                logging.info("Invalid Proxy")
-                continue
-            session = requests.Session()
-            data = scrape_url(session, target_url, proxy)
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch(session, target_url, proxy) for proxy in proxies]
+        for future in asyncio.as_completed(tasks):
+            data = await future
             if not data:
                 logging.info("Invalid Proxy")
                 continue
             json_data = extract_metadata(data)
             if json_data:
-                jobs_data = []
                 for job in json_data:
                     job_data = {}
                     job_data['job_id'] = job.get('jobkey', 'No Job ID')
@@ -156,21 +160,21 @@ def fetch_jobs(proxies, target_url):
                         logging.error(f"Error parsing job description for job ID {job_data['job_id']}: {e}")
                         job_data["job_description"] = description_content
                     jobs_data.append(job_data)
-                successful_fetch = True
-                break
-        if not successful_fetch:
-            logging.error("Failed to fetch jobs from all proxies.")
-    return jobs_data
+                return jobs_data
+    logging.error("Failed to fetch jobs from all proxies.")
+    return []
 
 @app.route('/')
 def home():
     return "OK"
 
 @app.route('/get-jobs', methods=['GET'])
-def get_jobs():
+async def get_jobs():
     try:
-        role = "software engineer"
-        location = "remote"
+        role = request.args.get('role', 'software engineer')
+        location = request.args.get('location', 'remote')
+        # role = "software engineer"
+        # location = "remote"
         print(f"role: {role}\nlocation: {location}")
         api_key = os.getenv('PROXY_API_SECRET')
         proxies_response = requests.get(
@@ -181,7 +185,7 @@ def get_jobs():
         proxies = proxies_response.json().get('results', [])
         scrape_url = os.getenv('SCRAPE_URL')
         url = f"{scrape_url}/jobs?q={role}&l={location}"
-        jobs = fetch_jobs(proxies, url)
+        jobs = await fetch_jobs(proxies, url)
         return jsonify({
             'role': role,
             'location': location,
@@ -195,7 +199,7 @@ def get_jobs():
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 @app.route('/get-job/<jobId>', methods=['GET'])
-def get_job(jobId):
+async def get_job(jobId):
     try:
         api_key = os.getenv('PROXY_API_SECRET')
         proxies_response = requests.get(
@@ -205,16 +209,15 @@ def get_job(jobId):
         proxies_response.raise_for_status()
         proxies = proxies_response.json().get('results', [])
         successful_fetch = False
-        data = None
-        for proxy in proxies:
-            if not proxy.get('valid', False):
-                logging.info("Invalid Proxy")
-                continue
-            session = requests.Session()
-            data = fetch_job_details(session, jobId, proxy)
-            if data:
-                successful_fetch = True
-                break
+        async with aiohttp.ClientSession() as session:
+            for proxy in proxies:
+                if not proxy.get('valid', False):
+                    logging.info("Invalid Proxy")
+                    continue
+                data = await fetch_job_details(session, jobId, proxy)
+                if data:
+                    successful_fetch = True
+                    break
         if not successful_fetch:
             logging.error(f"Failed to fetch job details for jobId {jobId} from all proxies.")
             return jsonify({"error": "Failed to retrieve data"}), 500
@@ -231,4 +234,3 @@ def get_job(jobId):
 
 if __name__ == '__main__':
     app.run(debug=True)
-# get_jobs()
