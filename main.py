@@ -3,7 +3,6 @@ from flask import Flask, jsonify, request
 import logging
 import requests
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import json
 import re
@@ -28,6 +27,18 @@ async def fetch(session, url, proxy):
         "Upgrade-Insecure-Requests": "1",
         "Referer": "https://www.google.com/",
     }
+
+    # Verify proxy configuration
+    try:
+        async with session.get('http://httpbin.org/ip', proxy=formatted_proxy_url, timeout=10) as test_response:
+            test_response.raise_for_status()
+            test_ip = await test_response.json()
+            logging.info(f"Using proxy {formatted_proxy_url}, detected IP: {test_ip}")
+    except Exception as e:
+        logging.error(f"Proxy test failed for {proxy}: {e}")
+        return None
+
+    # Fetch the actual URL using the proxy
     try:
         async with session.get(url, headers=headers, proxy=formatted_proxy_url, timeout=10) as response:
             response.raise_for_status()
@@ -39,11 +50,14 @@ async def fetch(session, url, proxy):
 
 async def scrape_url(url, proxies):
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch(session, url, proxy) for proxy in proxies]
-        for future in asyncio.as_completed(tasks):
-            result = await future
-            if result:
-                return result
+        for proxy in proxies:
+            try:
+                result = await fetch(session, url, proxy)
+                if result:
+                    return result
+            except Exception as e:
+                logging.error(f"Proxy {proxy} failed: {e}")
+                continue
     return None
 
 def extract_json_data(soup):
@@ -178,7 +192,7 @@ async def get_jobs():
         print(f"role: {role}\nlocation: {location}")
         api_key = os.getenv('PROXY_API_SECRET')
         proxies_response = requests.get(
-            "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=50&country_code__in=US,CA",
+            "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=100&country_code__in=US,CA",
             headers={"Authorization": f"Token {api_key}"}
         )
         proxies_response.raise_for_status()
@@ -203,9 +217,13 @@ async def get_job(jobId):
     try:
         api_key = os.getenv('PROXY_API_SECRET')
         proxies_response = requests.get(
-            "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=50&country_code__in=US,CA",
+            "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=75",
             headers={"Authorization": f"Token {api_key}"}
         )
+        # proxies_response = requests.get(
+        #     "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=50&country_code__in=US,CA",
+        #     headers={"Authorization": f"Token {api_key}"}
+        # )
         proxies_response.raise_for_status()
         proxies = proxies_response.json().get('results', [])
         successful_fetch = False
