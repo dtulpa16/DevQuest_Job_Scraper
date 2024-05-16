@@ -39,19 +39,24 @@ async def fetch(client, url):
         logging.error(f"Error fetching URL {url}: {e}")
         return None
 
-# Scrape URL using a list of proxies
-async def scrape_url(url, proxies):
-    for proxy in proxies:
-        formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
-        proxies_config = {
-            'http://': formatted_proxy_url,
-            'https://': formatted_proxy_url
-        }
+# Fetch URL content using HTTP client
+async def fetch(client, url, proxy=None):
+    try:
+        proxies_config = None
+        if proxy:
+            formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
+            proxies_config = {
+                'http://': formatted_proxy_url,
+                'https://': formatted_proxy_url
+            }
         async with httpx.AsyncClient(proxies=proxies_config) as client:
-            result = await fetch(client, url)
-            if result:
-                return result
-    return None
+            response = await client.get(url, headers=HEADERS, timeout=10)
+            response.raise_for_status()
+            html = response.text
+            return BeautifulSoup(html, 'lxml')
+    except Exception as e:
+        logging.error(f"Error fetching URL {url} with proxy {proxy}: {e}")
+        return None
 
 # Extract JSON data from BeautifulSoup object
 def extract_json_data(soup):
@@ -82,12 +87,15 @@ def extract_metadata(html_content):
 # Fetch job details using a specific proxy
 async def fetch_job_details(client, job_id, proxy):
     job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_id
-    job_soup = await fetch(client, job_url)
+    logging.info(f"Fetching job details from URL: {job_url} using proxy: {proxy}")
+    job_soup = await fetch(client, job_url, proxy)
     if not job_soup:
+        logging.error(f"Failed to fetch job page for job ID {job_id} with proxy {proxy}")
         return None
+    
     json_data = extract_json_data(job_soup)
     if not json_data:
-        logging.error(f"Failed to extract JSON data for job ID {job_id}")
+        logging.error(f"Failed to extract JSON data for job ID {job_id} from {job_url}")
         return None
     
     try:
