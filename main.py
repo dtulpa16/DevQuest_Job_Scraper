@@ -31,7 +31,7 @@ HEADERS = {
 # Fetch URL content using HTTP client
 async def fetch(client, url):
     try:
-        response = await client.get(url, headers=HEADERS, timeout=10)
+        response = await client.get(url, headers=HEADERS, timeout=20)
         response.raise_for_status()
         html = response.text
         return BeautifulSoup(html, 'lxml')
@@ -39,24 +39,19 @@ async def fetch(client, url):
         logging.error(f"Error fetching URL {url}: {e}")
         return None
 
-# Fetch URL content using HTTP client
-async def fetch(client, url, proxy=None):
-    try:
-        proxies_config = None
-        if proxy:
-            formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
-            proxies_config = {
-                'http://': formatted_proxy_url,
-                'https://': formatted_proxy_url
-            }
+# Scrape URL using a list of proxies
+async def scrape_url(url, proxies):
+    for proxy in proxies:
+        formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
+        proxies_config = {
+            'http://': formatted_proxy_url,
+            'https://': formatted_proxy_url
+        }
         async with httpx.AsyncClient(proxies=proxies_config) as client:
-            response = await client.get(url, headers=HEADERS, timeout=10)
-            response.raise_for_status()
-            html = response.text
-            return BeautifulSoup(html, 'lxml')
-    except Exception as e:
-        logging.error(f"Error fetching URL {url} with proxy {proxy}: {e}")
-        return None
+            result = await fetch(client, url)
+            if result:
+                return result
+    return None
 
 # Extract JSON data from BeautifulSoup object
 def extract_json_data(soup):
@@ -87,39 +82,45 @@ def extract_metadata(html_content):
 # Fetch job details using a specific proxy
 async def fetch_job_details(client, job_id, proxy):
     job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_id
-    logging.info(f"Fetching job details from URL: {job_url} using proxy: {proxy}")
-    job_soup = await fetch(client, job_url, proxy)
-    if not job_soup:
-        logging.error(f"Failed to fetch job page for job ID {job_id} with proxy {proxy}")
-        return None
-    
-    json_data = extract_json_data(job_soup)
-    if not json_data:
-        logging.error(f"Failed to extract JSON data for job ID {job_id} from {job_url}")
-        return None
-    
-    try:
-        job_details = {
-            "employer_logo": json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyImagesModel']['logoUrl'] if json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyImagesModel']['logoUrl'] else None,
-            "employer_name": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['sourceEmployerName'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['sourceEmployerName'] else json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyName'],
-            "job_title": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['title'] or json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['jobTitle'],
-            "job_apply_link": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['url'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['url'] else json_data['jobMetadataFooterModel']['originalJobLink']['href'],
-            "job_city": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['formatted']['short'],
-            "job_is_remote": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'].lower() == "remote",
-            "salary_text": json_data['salaryInfoModel']['salaryText'] if json_data['salaryInfoModel']['salaryText'] else 'None Provided',
-            "min_salary": json_data['salaryInfoModel']['salaryMin'] if json_data['salaryInfoModel']['salaryMin'] else 'None Provided',
-            "max_salary": json_data['salaryInfoModel']['salaryMax'] if json_data['salaryInfoModel']['salaryMax'] else 'None Provided',
-            "job_salary_currency": json_data['salaryInfoModel']['salaryCurrency'] if json_data['salaryInfoModel']['salaryCurrency'] else 'USD',
-            "job_description": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['text'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['text'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'],
-            "job_description_html": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'] else json_data['jobInfoWrapperModel']['jobInfoModel']['sanitizedJobDescription'],
-            "job_benefits": [attr.get('label') for attr in (json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits'] or json_data['benefitsModel']['benefits'])] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits'] or json_data['benefitsModel']['benefits'] else [],
-            "job_age": json_data['hiringInsightsModel']['age'] or None,
-            "attributes": [attr.get('label') for attr in (json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes'])] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes'] else [],
-        }
-        return job_details
-    except Exception as e:
-        logging.error(f"Failed to process job details for job ID {job_id}: {e}")
-        return None
+    formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
+    proxies_config = {
+        'http://': formatted_proxy_url,
+        'https://': formatted_proxy_url
+    }
+
+    async with httpx.AsyncClient(proxies=proxies_config) as client:
+        job_soup = await fetch(client, job_url)
+        if not job_soup:
+            logging.error(f"Failed to fetch job page for job ID {job_id} with proxy {formatted_proxy_url}")
+            return None
+        
+        json_data = extract_json_data(job_soup)
+        if not json_data:
+            logging.error(f"Failed to extract JSON data for job ID {job_id} from {job_url}")
+            return None
+        
+        try:
+            job_details = {
+                "employer_logo": json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyImagesModel']['logoUrl'] if json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyImagesModel']['logoUrl'] else None,
+                "employer_name": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['sourceEmployerName'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['sourceEmployerName'] else json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyName'],
+                "job_title": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['title'] or json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['jobTitle'],
+                "job_apply_link": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['url'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['url'] else json_data['jobMetadataFooterModel']['originalJobLink']['href'],
+                "job_city": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['formatted']['short'],
+                "job_is_remote": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'].lower() == "remote",
+                "salary_text": json_data['salaryInfoModel']['salaryText'] if json_data['salaryInfoModel']['salaryText'] else 'None Provided',
+                "min_salary": json_data['salaryInfoModel']['salaryMin'] if json_data['salaryInfoModel']['salaryMin'] else 'None Provided',
+                "max_salary": json_data['salaryInfoModel']['salaryMax'] if json_data['salaryInfoModel']['salaryMax'] else 'None Provided',
+                "job_salary_currency": json_data['salaryInfoModel']['salaryCurrency'] if json_data['salaryInfoModel']['salaryCurrency'] else 'USD',
+                "job_description": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['text'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['text'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'],
+                "job_description_html": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'] else json_data['jobInfoWrapperModel']['jobInfoModel']['sanitizedJobDescription'],
+                "job_benefits": [attr.get('label') for attr in (json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits'] or json_data['benefitsModel']['benefits'])] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['benefits'] or json_data['benefitsModel']['benefits'] else [],
+                "job_age": json_data['hiringInsightsModel']['age'] or None,
+                "attributes": [attr.get('label') for attr in (json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes'])] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes'] else [],
+            }
+            return job_details
+        except Exception as e:
+            logging.error(f"Failed to process job details for job ID {job_id}: {e}")
+            return None
 
 # Fetch jobs using a list of proxies
 async def fetch_jobs(proxies, target_url):
