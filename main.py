@@ -149,18 +149,21 @@ async def fetch_job_details(client, job_id, proxy):
 # Returns: list of job data dictionaries or empty list if all proxies fail
 async def fetch_jobs(proxies, target_url):
     jobs_data = []
-    for proxy in proxies: #! looping through proxies - if a proxy fails, it will iterate to next one. if proxy is valid and isnt rejected from scraped url, will not try next
+    for proxy in proxies:
         formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
         proxies_config = {
             'http://': formatted_proxy_url,
             'https://': formatted_proxy_url
         }
-        async with httpx.AsyncClient(proxies=proxies_config) as client: #cannot use http2 here
+        async with httpx.AsyncClient(proxies=proxies_config) as client:
             data = await fetch(client, target_url)
             if not data:
                 logging.info("Invalid Proxy")
                 continue
             json_data = extract_metadata(data)
+
+            if not json_data:
+                continue
             if json_data:
                 for job in json_data:
                     job_data = {
@@ -249,6 +252,8 @@ async def get_job(jobId):
                     logging.info("Invalid Proxy")
                     continue
                 result = await fetch_job_details(client, jobId, proxy)
+                if not result:
+                    continue
                 if result:
                     return jsonify({
                         'jobId': jobId,
