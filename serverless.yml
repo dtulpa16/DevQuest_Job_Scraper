@@ -3,10 +3,14 @@ provider:
   name: aws
   runtime: python3.11
   region: us-east-1
+  deploymentBucket:
+    name: job-scraper-serverless-layers-bucket
 
 plugins:
   - serverless-wsgi
   - serverless-python-requirements
+  - serverless-layers
+
 
 custom:
   wsgi:
@@ -17,6 +21,11 @@ custom:
     dockerizePip: true
     useStaticCache: true
     useDownloadCache: true
+    layer: true
+
+layers:
+  common:
+    path: layer
 
 functions:
   app:
@@ -30,6 +39,8 @@ functions:
           path: '{proxy+}'
           method: ANY
           cors: true
+    layers:
+      - {Ref: CommonLambdaLayer}
 
 package:
   exclude:

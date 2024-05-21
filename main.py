@@ -26,8 +26,9 @@ HEADERS = {
 
 async def fetch(client, url):
     try:
-        import httpx
         from bs4 import BeautifulSoup
+        import httpx
+        import lxml
         response = await client.get(url, headers=HEADERS, timeout=5)
         response.raise_for_status()
         html = response.text
@@ -176,6 +177,7 @@ def home():
 
 @app.route('/get-jobs', methods=['GET'])
 async def get_jobs():
+    from flask import request
     import httpx
     try:
         role = request.args.get('role', 'software engineer')
