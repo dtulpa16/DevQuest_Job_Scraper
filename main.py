@@ -1,13 +1,7 @@
 import os
 from flask import Flask, jsonify, request
 import logging
-import httpx
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-import json
-import re
-import lxml
-import asyncio
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
@@ -15,6 +9,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # Regex patterns for extracting data from scripts in the HTML
+import re
 INITIAL_DATA_PATTERN = re.compile(r'window._initialData\s*=\s*(\{.*?\});', re.DOTALL)
 JOB_CARDS_PATTERN = re.compile(r'window.mosaic.providerData\["mosaic-provider-jobcards"\]\s*=\s*(\{.*?\});', re.DOTALL)
 
@@ -29,14 +24,11 @@ HEADERS = {
     "Referer": "https://www.google.com/",
 }
 
-# Fetch URL content using HTTP client
-# Parameters:
-# - client: the HTTP client instance
-# - url: the URL to fetch
-# Returns: BeautifulSoup object with parsed HTML or None if failed
 async def fetch(client, url):
     try:
-        response = await client.get(url, headers=HEADERS, timeout=20)
+        import httpx
+        from bs4 import BeautifulSoup
+        response = await client.get(url, headers=HEADERS, timeout=5)
         response.raise_for_status()
         html = response.text
         return BeautifulSoup(html, 'lxml')
@@ -44,12 +36,8 @@ async def fetch(client, url):
         logging.error(f"Error fetching URL {url}: {e}")
         return None
 
-# Scrape URL using a list of proxies
-# Parameters:
-# - url: the URL to scrape
-# - proxies: list of proxy configurations
-# Returns: BeautifulSoup object with parsed HTML or None if all proxies fail
 async def scrape_url(url, proxies):
+    import httpx
     for proxy in proxies:
         formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
         proxies_config = {
@@ -62,11 +50,8 @@ async def scrape_url(url, proxies):
                 return result
     return None
 
-# Extract JSON data from BeautifulSoup object
-# Parameters:
-# - soup: BeautifulSoup object containing the HTML
-# Returns: JSON object extracted from the script tag or None if failed
 def extract_json_data(soup):
+    import json
     for script in soup.find_all('script'):
         if 'window._initialData' in script.text:
             match = INITIAL_DATA_PATTERN.search(script.text)
@@ -77,11 +62,8 @@ def extract_json_data(soup):
                     logging.error(f"Error decoding JSON: {e}")
     return None
 
-# Extract metadata from HTML content
-# Parameters:
-# - html_content: BeautifulSoup object containing the HTML
-# Returns: list of job metadata or None if failed
 def extract_metadata(html_content):
+    import json
     try:
         script_tag = html_content.find('script', {'id': 'mosaic-data'})
         if script_tag:
@@ -93,14 +75,8 @@ def extract_metadata(html_content):
         logging.error(f"Error extracting metadata: {e}")
     return None
 
-
-# Fetch job details using a specific proxy
-# Parameters:
-# - client: the HTTP client instance
-# - job_id: the ID of the job to fetch details for
-# - proxy: proxy configuration to use for the request
-# Returns: dictionary with job details or None if failed
 async def fetch_job_details(client, job_id, proxy):
+    import httpx
     job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_id
     formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
     proxies_config = {
@@ -142,12 +118,9 @@ async def fetch_job_details(client, job_id, proxy):
             logging.error(f"Failed to process job details for job ID {job_id}: {e}")
             return None
 
-# Fetch jobs using a list of proxies
-# Parameters:
-# - proxies: list of proxy configurations
-# - target_url: URL to fetch job listings from
-# Returns: list of job data dictionaries or empty list if all proxies fail
 async def fetch_jobs(proxies, target_url):
+    import httpx
+    from bs4 import BeautifulSoup
     jobs_data = []
     for proxy in proxies:
         formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
@@ -187,12 +160,8 @@ async def fetch_jobs(proxies, target_url):
     logging.error("Failed to fetch jobs from all proxies.")
     return []
 
-# Get list of proxies from API
-# Parameters:
-# - api_key: API key for the proxy service
-# - page_size: number of proxies to fetch per page
-# Returns: list of proxy configurations
 async def get_proxies(api_key, page_size=100):
+    import httpx
     async with httpx.AsyncClient() as client:
         proxies_response = await client.get(
             f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size={page_size}&country_code__in=US,CA",
@@ -201,19 +170,13 @@ async def get_proxies(api_key, page_size=100):
         proxies_response.raise_for_status()
         return proxies_response.json().get('results', [])
 
-
 @app.route('/health-check')
 def home():
     return "OK"
 
-
-#! Route to get jobs based on role and location
-# URL Parameters:
-# - role: job role to search for (default: "software engineer")
-# - location: job location to search for (default: "remote")
-# Returns: JSON response with job listings
 @app.route('/get-jobs', methods=['GET'])
 async def get_jobs():
+    import httpx
     try:
         role = request.args.get('role', 'software engineer')
         location = request.args.get('location', 'remote')
@@ -235,16 +198,12 @@ async def get_jobs():
         logging.error(f"Error in /get-jobs: {e}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
-
-#! Route to get job details based on job ID
-# URL Parameters:
-# - jobId: the ID of the job to fetch details for
-# Returns: JSON response with job details
 @app.route('/get-job/<jobId>', methods=['GET'])
 async def get_job(jobId):
+    import httpx
     try:
         api_key = os.getenv('PROXY_API_SECRET')
-        proxies = await get_proxies(api_key, page_size=75)
+        proxies = await get_proxies(api_key, page_size=100)
         
         async with httpx.AsyncClient() as client:
             for proxy in proxies:
