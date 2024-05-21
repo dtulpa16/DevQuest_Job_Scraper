@@ -56,7 +56,7 @@ async def scrape_url(url, proxies):
             'http://': formatted_proxy_url,
             'https://': formatted_proxy_url
         }
-        async with httpx.AsyncClient(proxies=proxies_config, http2=True) as client:
+        async with httpx.AsyncClient(proxies=proxies_config) as client:
             result = await fetch(client, url)
             if result:
                 return result
@@ -149,13 +149,13 @@ async def fetch_job_details(client, job_id, proxy):
 # Returns: list of job data dictionaries or empty list if all proxies fail
 async def fetch_jobs(proxies, target_url):
     jobs_data = []
-    for proxy in proxies:
+    for proxy in proxies: #! looping through proxies - if a proxy fails, it will iterate to next one. if proxy is valid and isnt rejected from scraped url, will not try next
         formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
         proxies_config = {
             'http://': formatted_proxy_url,
             'https://': formatted_proxy_url
         }
-        async with httpx.AsyncClient(proxies=proxies_config) as client:
+        async with httpx.AsyncClient(proxies=proxies_config) as client: #cannot use http2 here
             data = await fetch(client, target_url)
             if not data:
                 logging.info("Invalid Proxy")
