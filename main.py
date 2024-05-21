@@ -56,7 +56,7 @@ async def scrape_url(url, proxies):
             'http://': formatted_proxy_url,
             'https://': formatted_proxy_url
         }
-        async with httpx.AsyncClient(proxies=proxies_config) as client:
+        async with httpx.AsyncClient(proxies=proxies_config, http2=True) as client:
             result = await fetch(client, url)
             if result:
                 return result
