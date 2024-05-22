@@ -11,6 +11,7 @@ beautifulsoup4 = "==4.12.2"
 lxml = "*"
 aiohttp = "*"
 httpx = {extras = ["http2"], version = "*"}
+asyncio = "*"
 
 [dev-packages]
 

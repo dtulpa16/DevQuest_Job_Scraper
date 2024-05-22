@@ -27,7 +27,7 @@ HEADERS = {
 async def fetch(client, url):
     try:
         from bs4 import BeautifulSoup
-        # import httpx
+        import httpx
         import lxml
         response = await client.get(url, headers=HEADERS, timeout=5)
         response.raise_for_status()
@@ -97,6 +97,8 @@ async def fetch_job_details(client, job_id, proxy):
         logging.info(f"Time to extract JSON data: {end_extract_json - end_fetch:.4f} seconds")
 
         benefits = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job'].get('benefits', [])
+        if not benefits:
+            benefits = []
         job_details = {
             "employer_logo": json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyImagesModel']['logoUrl'] if json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyImagesModel']['logoUrl'] else None,
             "employer_name": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['sourceEmployerName'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['sourceEmployerName'] else json_data['jobInfoWrapperModel']['jobInfoModel']['jobInfoHeaderModel']['companyName'],
@@ -104,13 +106,13 @@ async def fetch_job_details(client, job_id, proxy):
             "job_apply_link": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['url'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['url'] else json_data['jobMetadataFooterModel']['originalJobLink']['href'],
             "job_city": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['formatted']['short'],
             "job_is_remote": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'].lower() == "remote" if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['location']['city'] else False,
-            "salary_text": json_data['salaryInfoModel']['salaryText'] if json_data['salaryInfoModel'] else json_data['salaryGuideModel']['estimatedSalaryModel']['formattedRange'],
-            "min_salary": json_data['salaryInfoModel']['salaryMin'] if json_data['salaryInfoModel'] else json_data['salaryGuideModel']['estimatedSalaryModel']['min'],
-            "max_salary": json_data['salaryInfoModel']['salaryMax'] if json_data['salaryInfoModel'] else json_data['salaryGuideModel']['estimatedSalaryModel']['max'],
-            "job_salary_currency": json_data['salaryInfoModel']['salaryCurrency'] if json_data['salaryInfoModel'] else 'USD',
+            "salary_text": json_data['salaryInfoModel']['salaryText'] if json_data.get('salaryInfoModel') else json_data['salaryGuideModel']['estimatedSalaryModel']['formattedRange'] if json_data['salaryGuideModel'].get('estimatedSalaryModel') else 'Not Specified',
+            "min_salary": json_data['salaryInfoModel']['salaryMin'] if json_data.get('salaryInfoModel') else json_data['salaryGuideModel']['estimatedSalaryModel']['min'] if json_data['salaryGuideModel'].get('estimatedSalaryModel') else None,
+            "max_salary": json_data['salaryInfoModel']['salaryMax'] if json_data.get('salaryInfoModel') else json_data['salaryGuideModel']['estimatedSalaryModel']['max'] if json_data['salaryGuideModel'].get('estimatedSalaryModel') else None,
+            "job_salary_currency": json_data['salaryInfoModel']['salaryCurrency'] if json_data.get('salaryInfoModel') else 'USD',
             "job_description": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['text'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['text'] else json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'],
             "job_description_html": json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['description']['html'] else json_data['jobInfoWrapperModel']['jobInfoModel']['sanitizedJobDescription'],
-            "job_benefits": [attr.get('label') for attr in benefits],
+            "job_benefits": [attr.get('label') for attr in benefits] if benefits else [],
             "job_age": json_data['hiringInsightsModel']['age'] or None,
             "attributes": [attr.get('label') for attr in (json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes'])] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes'] else [],
         }
@@ -126,13 +128,14 @@ async def fetch_jobs(proxies, target_url):
     import httpx
     from bs4 import BeautifulSoup
     jobs_data = []
-    for proxy in proxies:
-        formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
-        proxies_config = {
-            'http://': formatted_proxy_url,
-            'https://': formatted_proxy_url
-        }
-        async with httpx.AsyncClient(proxies=proxies_config) as client:
+    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=10, max_keepalive_connections=5), timeout=httpx.Timeout(5.0)) as client:
+        for proxy in proxies:
+            formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
+            proxies_config = {
+                'http://': formatted_proxy_url,
+                'https://': formatted_proxy_url
+            }
+            client.proxies = proxies_config
             data = await fetch(client, target_url)
             if not data:
                 logging.info("Invalid Proxy")
@@ -167,12 +170,11 @@ async def fetch_jobs(proxies, target_url):
 async def get_proxies(api_key, page_size=50):
     import requests
     proxies_response = requests.get(
-            f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=25&country_code__in=US,CA",
+            f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size={page_size}&country_code__in=US,CA",
             headers={"Authorization": f"Token {api_key}"}
         )
     proxies_response.raise_for_status()
     return proxies_response.json().get('results', [])
-
 @app.route('/health-check')
 def home():
     return "OK"
@@ -227,6 +229,8 @@ async def get_job(jobId):
 
                 start_fetch_details = time.time()
                 result = await fetch_job_details(client, jobId, proxy)
+                if not result:
+                    continue
                 if result:
                     end_fetch_details = time.time()
                     logging.info(f"Time to fetch job details for proxy {proxy['proxy_address']}: {end_fetch_details - start_fetch_details:.4f} seconds")
