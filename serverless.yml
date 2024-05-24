@@ -23,6 +23,10 @@ custom:
 
   pythonRequirements:
     dockerizePip: true
+    useStaticCache: true
+    useDownloadCache: true
+    slim: true
+    strip: true
 
 functions:
   app:

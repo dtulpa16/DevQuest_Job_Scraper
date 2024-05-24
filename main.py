@@ -1,7 +1,9 @@
 import os
-from flask import Flask, jsonify
+import re
 import logging
+from flask import Flask, jsonify, request
 from dotenv import load_dotenv
+
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 
@@ -29,11 +31,9 @@ HEADERS = {
 # - url: the URL to fetch
 # Returns: BeautifulSoup object with parsed HTML or None if failed
 async def fetch(client, url):
+    from bs4 import BeautifulSoup
     try:
-        from bs4 import BeautifulSoup
-        import lxml
-        # client.headers = headers
-        response = await client.get(url,headers=HEADERS)
+        response = await client.get(url, headers=HEADERS)
         response.raise_for_status()
         html = response.text
         return BeautifulSoup(html, 'lxml')
@@ -147,9 +147,6 @@ async def fetch_jobs(proxies, target_url):
             if json_data:
 
                 for job in json_data:
-                    # snippet_html = job.get('snippet', '')
-                    # if not snippet_html:
-                    #     snippet_html = '<div></div>'
                     job_data = {
                         'job_id': job.get('jobkey', 'No Job ID'),
                         'job_title': job.get('displayTitle') or job.get('title', 'Unknown Title'),
@@ -181,11 +178,12 @@ async def fetch_jobs(proxies, target_url):
 def get_proxies(api_key, page_size=15):
     import requests
     proxies_response = requests.get(
-            f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&country_code__in=US&ordering=last_verification",
+            f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&country_code__in=US&ordering=-last_verification",
             headers={"Authorization": f"Token {api_key}"}
         )
     proxies_response.raise_for_status()
     return proxies_response.json().get('results', [])
+
 
 @app.route('/health-check')
 def home():
@@ -198,7 +196,6 @@ def home():
 # Returns: JSON response with job listings
 @app.route('/get-jobs', methods=['GET'])
 async def get_jobs():
-    from flask import request
     try:
         role = request.args.get('role', 'software+developer')
         location = request.args.get('location', 'remote')
