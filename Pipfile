@@ -5,13 +5,12 @@ name = "pypi"
 
 [packages]
 requests = "==2.31.0"
-flask = {version = "*", extras = ["async"]}
 python-dotenv = "==1.0.1"
 beautifulsoup4 = "==4.12.2"
 lxml = "*"
 aiohttp = "*"
 httpx = {extras = ["http2"], version = "*"}
-asyncio = "*"
+flask = {extras = ["async"], version = "*"}
 
 [dev-packages]
 

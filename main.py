@@ -1,8 +1,7 @@
 import os
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 import logging
 from dotenv import load_dotenv
-import time
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 
@@ -21,15 +20,20 @@ HEADERS = {
     "DNT": "1",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
-    "Referer": "https://www.google.com/",
+    "Referer": os.getenv('SCRAPE_URL'),
 }
 
+# Fetch URL content using HTTP client
+# Parameters:
+# - client: the HTTP client instance
+# - url: the URL to fetch
+# Returns: BeautifulSoup object with parsed HTML or None if failed
 async def fetch(client, url):
     try:
         from bs4 import BeautifulSoup
-        import httpx
         import lxml
-        response = await client.get(url, headers=HEADERS, timeout=5)
+        # client.headers = headers
+        response = await client.get(url,headers=HEADERS)
         response.raise_for_status()
         html = response.text
         return BeautifulSoup(html, 'lxml')
@@ -37,20 +41,10 @@ async def fetch(client, url):
         logging.error(f"Error fetching URL {url}: {e}")
         return None
 
-async def scrape_url(url, proxies):
-    import httpx
-    for proxy in proxies:
-        formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
-        proxies_config = {
-            'http://': formatted_proxy_url,
-            'https://': formatted_proxy_url
-        }
-        async with httpx.AsyncClient(proxies=proxies_config) as client:
-            result = await fetch(client, url)
-            if result:
-                return result
-    return None
-
+# Extract JSON data from BeautifulSoup object
+# Parameters:
+# - soup: BeautifulSoup object containing the HTML
+# Returns: JSON object extracted from the script tag or None if failed
 def extract_json_data(soup):
     import json
     for script in soup.find_all('script'):
@@ -63,6 +57,10 @@ def extract_json_data(soup):
                     logging.error(f"Error decoding JSON: {e}")
     return None
 
+# Extract metadata from HTML content
+# Parameters:
+# - html_content: BeautifulSoup object containing the HTML
+# Returns: list of job metadata or None if failed
 def extract_metadata(html_content):
     import json
     try:
@@ -76,25 +74,25 @@ def extract_metadata(html_content):
         logging.error(f"Error extracting metadata: {e}")
     return None
 
+# Fetch job details using a specific proxy
+# Parameters:
+# - client: the HTTP client instance
+# - job_id: the ID of the job to fetch details for
+# - proxy: proxy configuration to use for the request
+# Returns: dictionary with job details or None if failed
 async def fetch_job_details(client, job_id, proxy):
     try:
-        start_time = time.time()
         job_url = os.getenv('SCRAPE_URL') + '/viewjob?jk=' + job_id
         job_soup = await fetch(client, job_url)
         if not job_soup:
-            logging.error(f"Failed to fetch job page for job ID {job_id} with proxy {proxy['proxy_address']}")
+            logging.error(f"Failed to fetch job page for job ID {job_id} with proxy {proxy}")
             return None
 
-        end_fetch = time.time()
-        logging.info(f"Time to fetch job page: {end_fetch - start_time:.4f} seconds")
 
         json_data = extract_json_data(job_soup)
         if not json_data:
             logging.error(f"Failed to extract JSON data for job ID {job_id} from {job_url}")
             return None
-
-        end_extract_json = time.time()
-        logging.info(f"Time to extract JSON data: {end_extract_json - end_fetch:.4f} seconds")
 
         benefits = json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job'].get('benefits', [])
         if not benefits:
@@ -116,36 +114,42 @@ async def fetch_job_details(client, job_id, proxy):
             "job_age": json_data['hiringInsightsModel']['age'] or None,
             "attributes": [attr.get('label') for attr in (json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes'])] if json_data['hostQueryExecutionResult']['data']['jobData']['results'][0]['job']['attributes'] else [],
         }
-        end_process = time.time()
-        logging.info(f"Time to process job details: {end_process - end_extract_json:.4f} seconds")
         return job_details
 
     except Exception as e:
         logging.error(f"Failed to process job details for job ID {job_id}: {e}")
         return None
 
+# Fetch jobs using a list of proxies
+# Parameters:
+# - proxies: list of proxy configurations
+# - target_url: URL to fetch job listings from
+# Returns: list of job data dictionaries or empty list if all proxies fail
 async def fetch_jobs(proxies, target_url):
     import httpx
-    from bs4 import BeautifulSoup
     jobs_data = []
-    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=10, max_keepalive_connections=5), timeout=httpx.Timeout(5.0)) as client:
-        for proxy in proxies:
-            formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
-            proxies_config = {
-                'http://': formatted_proxy_url,
-                'https://': formatted_proxy_url
-            }
-            client.proxies = proxies_config
+    for proxy in proxies: 
+        formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
+        proxies_config = {
+            'http://': formatted_proxy_url,
+            'https://': formatted_proxy_url
+        }
+        async with httpx.AsyncClient(headers=HEADERS, proxies=proxies_config,limits=httpx.Limits(max_connections=1, max_keepalive_connections=1), timeout=httpx.Timeout(5.0)) as client:
+
             data = await fetch(client, target_url)
             if not data:
-                logging.info("Invalid Proxy")
+                logging.info("INVALID PROXY: ", proxy)
                 continue
             json_data = extract_metadata(data)
 
             if not json_data:
                 continue
             if json_data:
+
                 for job in json_data:
+                    # snippet_html = job.get('snippet', '')
+                    # if not snippet_html:
+                    #     snippet_html = '<div></div>'
                     job_data = {
                         'job_id': job.get('jobkey', 'No Job ID'),
                         'job_title': job.get('displayTitle') or job.get('title', 'Unknown Title'),
@@ -160,87 +164,95 @@ async def fetch_jobs(proxies, target_url):
                         'employer_logo': job.get('companyBrandingAttributes', {}).get('logoUrl'),
                         'html_snippet': job.get('snippet', '<></>'),
                         'job_apply_link': job.get('thirdPartyApplyUrl'),
-                        'job_description': [li.get_text(strip=True) for li in BeautifulSoup(job.get('snippet', ''), 'html.parser').find_all('li') if li.text.strip()],
+                        # 'job_description': [li.get_text(strip=True) for li in BeautifulSoup(snippet_html, 'html.parser').find_all('li') if li.text.strip()]
+                        'job_description': ""
                     }
                     jobs_data.append(job_data)
+                
                 return jobs_data
     logging.error("Failed to fetch jobs from all proxies.")
     return []
 
-async def get_proxies(api_key, page_size=50):
+# Get list of proxies from API
+# Parameters:
+# - api_key: API key for the proxy service
+# - page_size: number of proxies to fetch per page
+# Returns: list of proxy configurations
+def get_proxies(api_key, page_size=15):
     import requests
     proxies_response = requests.get(
-            f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size={page_size}&country_code__in=US,CA",
+            f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&country_code__in=US&ordering=last_verification",
             headers={"Authorization": f"Token {api_key}"}
         )
     proxies_response.raise_for_status()
     return proxies_response.json().get('results', [])
+
 @app.route('/health-check')
 def home():
     return "OK"
 
+#! Route to get jobs based on role and location
+# URL Parameters:
+# - role: job role to search for (default: "software engineer")
+# - location: job location to search for (default: "remote")
+# Returns: JSON response with job listings
 @app.route('/get-jobs', methods=['GET'])
 async def get_jobs():
     from flask import request
-    import httpx
     try:
-        role = request.args.get('role', 'software engineer')
+        role = request.args.get('role', 'software+developer')
         location = request.args.get('location', 'remote')
-        print(f"role: {role}\nlocation: {location}")
+        logging.debug(f"Role: {role}, Location: {location}")
+
         api_key = os.getenv('PROXY_API_SECRET')
-        proxies = await get_proxies(api_key, page_size=50)
+
+        proxies = get_proxies(api_key, page_size=15)
+
         scrape_url = os.getenv('SCRAPE_URL')
         url = f"{scrape_url}/jobs?q={role}&l={location}"
+
         jobs = await fetch_jobs(proxies, url)
+
         return jsonify({
             'role': role,
             'location': location,
-            'jobs': jobs
+            'jobs': jobs,
+         
         })
-    except httpx.RequestError as e:
-        logging.error(f"Error fetching proxies: {e}")
-        return jsonify({"error": "Failed to retrieve proxies"}), 500
     except Exception as e:
         logging.error(f"Error in /get-jobs: {e}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
+#! Route to get job details based on job ID
+# URL Parameters:
+# - jobId: the ID of the job to fetch details for
+# Returns: JSON response with job details
 @app.route('/get-job/<jobId>', methods=['GET'])
 async def get_job(jobId):
     import httpx
     try:
-        start_time = time.time()
         api_key = os.getenv('PROXY_API_SECRET')
-        proxies = await get_proxies(api_key, page_size=50)
-        end_get_proxies = time.time()
-        logging.info(f"Time to get proxies: {end_get_proxies - start_time:.4f} seconds")
+        proxies = get_proxies(api_key, page_size=15)
 
-        async with httpx.AsyncClient() as client:
-            for proxy in proxies:
-                formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
-                proxies_config = {
-                    'http://': formatted_proxy_url,
-                    'https://': formatted_proxy_url
-                }
-                client.proxies = proxies_config
-
+        for proxy in proxies:
+            formatted_proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['proxy_address']}:{proxy['port']}"
+            proxies_config = {
+                'http://': formatted_proxy_url,
+                'https://': formatted_proxy_url
+            }
+            async with httpx.AsyncClient(headers=HEADERS, proxies=proxies_config,limits=httpx.Limits(max_connections=1, max_keepalive_connections=1), timeout=httpx.Timeout(5.0)) as client:
                 if not proxy.get('valid', False):
                     logging.info("Invalid Proxy")
                     continue
 
-                start_fetch_details = time.time()
                 result = await fetch_job_details(client, jobId, proxy)
                 if not result:
                     continue
                 if result:
-                    end_fetch_details = time.time()
-                    logging.info(f"Time to fetch job details for proxy {proxy['proxy_address']}: {end_fetch_details - start_fetch_details:.4f} seconds")
-                    total_time = time.time() - start_time
-                    logging.info(f"Total time to process get-job request: {total_time:.4f} seconds")
                     return jsonify({'jobId': jobId, 'job': result})
 
         logging.error(f"Failed to fetch job details for jobId {jobId} from all proxies.")
-        total_time = time.time() - start_time
-        logging.info(f"Total time to process get-job request (failure): {total_time:.4f} seconds")
+        
         return jsonify({"error": "Failed to retrieve data"}), 500
 
     except httpx.RequestError as e:

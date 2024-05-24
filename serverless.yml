@@ -1,15 +1,19 @@
-service: devquest-job-scraper
+service: dq-webscrape
 provider:
   name: aws
   runtime: python3.11
   region: us-east-1
-  deploymentBucket:
-    name: job-scraper-serverless-layers-bucket
+  environment:
+    BUCKET: dq-webscrape-dev-serverlessdeploymentbucket-kjzi490naosv
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "s3:*"
+      Resource: "arn:aws:s3:::${self:provider.environment.BUCKET}/*"
 
 plugins:
   - serverless-wsgi
   - serverless-python-requirements
-  - serverless-layers
 
 
 custom:
@@ -19,13 +23,6 @@ custom:
 
   pythonRequirements:
     dockerizePip: true
-    useStaticCache: true
-    useDownloadCache: true
-    layer: true
-
-layers:
-  common:
-    path: layer
 
 functions:
   app:
@@ -39,9 +36,7 @@ functions:
           path: '{proxy+}'
           method: ANY
           cors: true
-    layers:
-      - {Ref: CommonLambdaLayer}
-
+          
 package:
   exclude:
     - node_modules/**
