@@ -1,4 +1,5 @@
 import os
+import random
 import re
 import logging
 from flask import Flask, jsonify, request
@@ -13,17 +14,29 @@ app = Flask(__name__)
 import re
 INITIAL_DATA_PATTERN = re.compile(r'window._initialData\s*=\s*(\{.*?\});', re.DOTALL)
 JOB_CARDS_PATTERN = re.compile(r'window.mosaic.providerData\["mosaic-provider-jobcards"\]\s*=\s*(\{.*?\});', re.DOTALL)
-
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.2420.81",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+]
 # Headers for making requests to the job site
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Language": "en-US,en;q=0.5",
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Referer": os.getenv('SCRAPE_URL'),
-}
+def get_random_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.5",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Referer": os.getenv('SCRAPE_URL') + "/",
+    }
+
 
 # Fetch URL content using HTTP client
 # Parameters:
@@ -33,7 +46,7 @@ HEADERS = {
 async def fetch(client, url):
     from bs4 import BeautifulSoup
     try:
-        response = await client.get(url, headers=HEADERS)
+        response = await client.get(url,headers=get_random_headers())
         response.raise_for_status()
         html = response.text
         return BeautifulSoup(html, 'lxml')
@@ -134,7 +147,7 @@ async def fetch_jobs(proxies, target_url):
             'http://': formatted_proxy_url,
             'https://': formatted_proxy_url
         }
-        async with httpx.AsyncClient(headers=HEADERS, proxies=proxies_config,limits=httpx.Limits(max_connections=1, max_keepalive_connections=1), timeout=httpx.Timeout(5.0)) as client:
+        async with httpx.AsyncClient( proxies=proxies_config,limits=httpx.Limits(max_connections=1, max_keepalive_connections=1), timeout=httpx.Timeout(5.0)) as client:
 
             data = await fetch(client, target_url)
             if not data:
@@ -178,7 +191,7 @@ async def fetch_jobs(proxies, target_url):
 def get_proxies(api_key, page_size=15):
     import requests
     proxies_response = requests.get(
-            f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&country_code__in=US&ordering=-last_verification",
+            f"https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&country_code__in=US",
             headers={"Authorization": f"Token {api_key}"}
         )
     proxies_response.raise_for_status()
@@ -237,7 +250,7 @@ async def get_job(jobId):
                 'http://': formatted_proxy_url,
                 'https://': formatted_proxy_url
             }
-            async with httpx.AsyncClient(headers=HEADERS, proxies=proxies_config,limits=httpx.Limits(max_connections=1, max_keepalive_connections=1), timeout=httpx.Timeout(5.0)) as client:
+            async with httpx.AsyncClient(proxies=proxies_config,limits=httpx.Limits(max_connections=1, max_keepalive_connections=1), timeout=httpx.Timeout(5.0)) as client:
                 if not proxy.get('valid', False):
                     logging.info("Invalid Proxy")
                     continue
