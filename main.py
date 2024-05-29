@@ -2,6 +2,7 @@ import os
 import random
 import re
 import logging
+from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 
@@ -28,6 +29,7 @@ USER_AGENTS = [
 # Headers for making requests to the job site
 def get_random_headers():
     return {
+        # "Host":"www.indeed.com",
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "en-US,en;q=0.5",
@@ -35,6 +37,7 @@ def get_random_headers():
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
         "Referer": os.getenv('SCRAPE_URL') + "/",
+        # "X-Amzn-Trace-Id":""
     }
 
 
@@ -147,6 +150,12 @@ async def fetch_jobs(proxies, target_url):
             'http://': formatted_proxy_url,
             'https://': formatted_proxy_url
         }
+        # import requests
+
+        # proxies = proxies_config
+
+        # r = requests.get('http://httpbin.org/headers', proxies=proxies, verify=False)
+        # print(r.text)
         async with httpx.AsyncClient( proxies=proxies_config,limits=httpx.Limits(max_connections=1, max_keepalive_connections=1), timeout=httpx.Timeout(5.0)) as client:
 
             data = await fetch(client, target_url)
@@ -160,6 +169,9 @@ async def fetch_jobs(proxies, target_url):
             if json_data:
 
                 for job in json_data:
+                    snippet_html = job.get('snippet', '')
+                    if not snippet_html:
+                        snippet_html = '<div></div>'
                     job_data = {
                         'job_id': job.get('jobkey', 'No Job ID'),
                         'job_title': job.get('displayTitle') or job.get('title', 'Unknown Title'),
@@ -174,8 +186,7 @@ async def fetch_jobs(proxies, target_url):
                         'employer_logo': job.get('companyBrandingAttributes', {}).get('logoUrl'),
                         'html_snippet': job.get('snippet', '<></>'),
                         'job_apply_link': job.get('thirdPartyApplyUrl'),
-                        # 'job_description': [li.get_text(strip=True) for li in BeautifulSoup(snippet_html, 'html.parser').find_all('li') if li.text.strip()]
-                        'job_description': ""
+                        'job_description': [li.get_text(strip=True) for li in BeautifulSoup(snippet_html, 'html.parser').find_all('li') if li.text.strip()]
                     }
                     jobs_data.append(job_data)
                 
