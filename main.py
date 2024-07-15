@@ -29,15 +29,10 @@ USER_AGENTS = [
 # Headers for making requests to the job site
 def get_random_headers():
     return {
-        # "Host":"www.indeed.com",
-        "User-Agent": random.choice(USER_AGENTS),
+        "Referer": os.getenv('SCRAPE_URL'),
+        "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "en-US,en;q=0.5",
-        "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Referer": os.getenv('SCRAPE_URL') + "/",
-        # "X-Amzn-Trace-Id":""
+        "User-Agent": random.choice(USER_AGENTS),
     }
 
 
